@@ -167,23 +167,51 @@ impl SharedDPDKRuntime {
             RTE_ETHER_MAX_LEN
         };
 
+        // Only request offloads the device actually supports. Virtual PMDs
+        // (net_af_packet, net_pcap) advertise zero capabilities; requesting
+        // unsupported offloads causes rte_eth_dev_configure() to fail.
+        let rx_capa = dev_info.rx_offload_capa;
+        let tx_capa = dev_info.tx_offload_capa;
+
         if tcp_checksum_offload {
-            port_conf.rxmode.offloads |= unsafe { rte_eth_rx_offload_tcp_cksum() as u64 };
+            let flag = unsafe { rte_eth_rx_offload_tcp_cksum() as u64 };
+            if rx_capa & flag != 0 {
+                port_conf.rxmode.offloads |= flag;
+            }
         }
         if udp_checksum_offload {
-            port_conf.rxmode.offloads |= unsafe { rte_eth_rx_offload_udp_cksum() as u64 };
+            let flag = unsafe { rte_eth_rx_offload_udp_cksum() as u64 };
+            if rx_capa & flag != 0 {
+                port_conf.rxmode.offloads |= flag;
+            }
         }
-        port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
-        port_conf.rx_adv_conf.rss_conf.rss_hf = unsafe { rte_eth_rss_ip() as u64 } | dev_info.flow_type_rss_offloads;
+
+        // Only enable RSS when the device advertises RSS hash offloads.
+        if dev_info.flow_type_rss_offloads != 0 {
+            port_conf.rxmode.mq_mode = RTE_ETH_MQ_RX_RSS;
+            port_conf.rx_adv_conf.rss_conf.rss_hf =
+                (unsafe { rte_eth_rss_ip() as u64 }) & dev_info.flow_type_rss_offloads;
+        }
 
         port_conf.txmode.mq_mode = RTE_ETH_MQ_TX_NONE;
         if tcp_checksum_offload {
-            port_conf.txmode.offloads |= unsafe { rte_eth_tx_offload_tcp_cksum() as u64 };
+            let flag = unsafe { rte_eth_tx_offload_tcp_cksum() as u64 };
+            if tx_capa & flag != 0 {
+                port_conf.txmode.offloads |= flag;
+            }
         }
         if udp_checksum_offload {
-            port_conf.txmode.offloads |= unsafe { rte_eth_tx_offload_udp_cksum() as u64 };
+            let flag = unsafe { rte_eth_tx_offload_udp_cksum() as u64 };
+            if tx_capa & flag != 0 {
+                port_conf.txmode.offloads |= flag;
+            }
         }
-        port_conf.txmode.offloads |= unsafe { rte_eth_tx_offload_multi_segs() as u64 };
+        {
+            let flag = unsafe { rte_eth_tx_offload_multi_segs() as u64 };
+            if tx_capa & flag != 0 {
+                port_conf.txmode.offloads |= flag;
+            }
+        }
 
         // RX config
         let mut rx_conf: rte_eth_rxconf = unsafe { MaybeUninit::zeroed().assume_init() };
