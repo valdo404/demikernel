@@ -105,14 +105,6 @@ impl<T: NetworkTransport> SharedNetworkLibOS<T> {
         // We only support IPv4 addresses.
         let socket_addrv4: SocketAddrV4 = unwrap_socketaddr(socket_addr)?;
 
-        // We only support the wildcard address for UDP sockets.
-        // FIXME: https://github.com/demikernel/demikernel/issues/189
-        if *socket_addrv4.ip() == Ipv4Addr::UNSPECIFIED && self.get_shared_queue(&qd)?.qtype() != QType::UdpSocket {
-            error!("bind(): cannot bind to wildcard address (qd={:?})", qd);
-            return Err(Fail::new(libc::ENOTSUP, "cannot bind to wildcard address"));
-        }
-
-        // We only support the wildcard address for UDP sockets.
         // FIXME: https://github.com/demikernel/demikernel/issues/582
         if socket_addr.port() == 0 && self.get_shared_queue(&qd)?.qtype() != QType::UdpSocket {
             error!("bind(): cannot bind to port 0 (qd={:?})", qd);

@@ -107,9 +107,9 @@ impl SharedTcpPeer {
     }
 
     /// Binds a socket to a local address supplied by [local].
+    /// Supports wildcard address (0.0.0.0) — the socket will accept connections on any local IP.
     pub fn bind(&mut self, socket: &mut SharedTcpSocket, local: SocketAddrV4) -> Result<(), Fail> {
         // All other checks should have been done already.
-        debug_assert!(!Ipv4Addr::is_unspecified(local.ip()));
         debug_assert!(local.port() != 0);
         debug_assert!(!self.addresses.contains_key(&SocketId::Passive(local)));
 
@@ -149,8 +149,16 @@ impl SharedTcpPeer {
         local: SocketAddrV4,
         remote: SocketAddrV4,
     ) -> Result<(), Fail> {
-        // If socket is already bound to a local address, use it but remove the old binding.
+        // Remove the passive binding (before resolving wildcard, since the key
+        // in the map uses the original address the socket was bound to).
         self.addresses.remove(&SocketId::Passive(local));
+        // Resolve wildcard address to the concrete local IP for outgoing connections.
+        // TCP packets must have a real source IP address.
+        let local = if local.ip().is_unspecified() {
+            SocketAddrV4::new(self.local_ipv4_addr, local.port())
+        } else {
+            local
+        };
         // Insert the connection to receive incoming packets for this address pair.
         // Should we remove the passive entry for the local address if the socket was previously bound?
         if self
@@ -233,20 +241,28 @@ impl SharedTcpPeer {
         let remote: SocketAddrV4 = SocketAddrV4::new(src_ipv4_addr, tcp_hdr.src_port);
 
         // Retrieve the queue descriptor based on the incoming segment.
+        // Try: active (established) → passive (exact IP) → passive (wildcard 0.0.0.0).
         let socket: &mut SharedTcpSocket = match self.addresses.get_mut(&SocketId::Active(local, remote)) {
             Some(socket) => socket,
             None => match self.addresses.get_mut(&SocketId::Passive(local)) {
                 Some(socket) => socket,
                 None => {
-                    let cause: String = format!(
-                        "no queue descriptor for remote address (remote={}:{}, local={}:{})",
-                        remote.ip(),
-                        remote.port(),
-                        local.ip(),
-                        local.port()
-                    );
-                    error!("receive(): {}", &cause);
-                    return;
+                    // Wildcard fallback: a listener bound to 0.0.0.0:port accepts on any IP.
+                    let wildcard = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, tcp_hdr.dst_port);
+                    match self.addresses.get_mut(&SocketId::Passive(wildcard)) {
+                        Some(socket) => socket,
+                        None => {
+                            let cause: String = format!(
+                                "no queue descriptor for remote address (remote={}:{}, local={}:{})",
+                                remote.ip(),
+                                remote.port(),
+                                local.ip(),
+                                local.port()
+                            );
+                            error!("receive(): {}", &cause);
+                            return;
+                        },
+                    }
                 },
             },
         };
